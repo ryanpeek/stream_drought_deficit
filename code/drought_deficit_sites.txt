@@ -1,0 +1,52 @@
+!pip install -q geopandas 
+
+%matplotlib inline
+import os
+import geopandas as gp
+import sys
+import seaborn as sns
+from matplotlib import pyplot as plt
+import numpy as np
+from google.colab import files
+import pandas as pd
+import scipy
+import glob
+import datetime
+from shapely.geometry import Point
+import requests
+import ee
+from google.colab import files
+from shapely.geometry import Polygon, MultiPolygon
+import ee
+%config InlineBackend.figure_format = 'retina'
+
+ee.Authenticate()
+
+
+# specify point locations and site names for deficit calculations
+pts = [Point( -119.188446,37.063012),
+       Point( -123.630644,39.723181),
+       Point( -121.79203, 37.50237),
+       Point( -121.26971, 35.82157),
+       Point( -120.92493, 39.10509)]
+
+# specify site names
+sites = ['PROV','ELDER','ALAMEDA','SCARP','NFA']
+
+# geodataframe to save data
+gdf = gp.GeoDataFrame({'site':sites},geometry=pts,crs='epsg:4326',index=[0,1,2,3,4])
+
+# Create earth engine feature collection
+fts_list = []
+geos = []
+names = []
+for i,row in gdf.iterrows():
+  x = row.geometry.centroid.x
+  y = row.geometry.centroid.y
+  geo = ee.Geometry.Point((x,y))
+  geos.append(geo)
+  names.append(row.site)
+  ft = ee.Feature(geo)
+  ft = ft.set('site',row.site)
+  fts_list.append(ft)
+fts = ee.FeatureCollection(fts_list)

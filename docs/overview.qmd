@@ -1,0 +1,160 @@
+---
+title: "Drought Deficit"
+format: html
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup}
+#| echo: false
+#| hide: true
+#| warning: false
+#| message: false
+#| results: false
+
+library(here)
+source(here("code/f_get_fonts.R"))
+
+# set fonts depending on system:
+font1 <- if(get_os()=="windows"){
+  "Century Gothic"
+} else {
+  "Atkinson Hyperlegible"
+}
+font2 <- "Roboto Condensed"
+
+# load fonts
+f_get_fonts(font1, font2)
+
+# now load libraries
+library(tidyverse)
+library(here)
+#library(reticulate)
+library(sf)
+library(mapview)
+mapviewOptions(fgb=FALSE)
+
+
+```
+
+
+## Drought Subsurface Deficit Analysis
+
+Based on Dralle et al (numerous) papers.
+
+### Code 
+
+Code is based on this analysis in `python`.
+
+```{bash}
+#| eval: false
+#| echo: true
+#| code-line-numbers: "|24"
+!pip install -q geopandas 
+
+%matplotlib inline
+import os
+import geopandas as gp
+import sys
+import seaborn as sns
+from matplotlib import pyplot as plt
+import numpy as np
+from google.colab import files
+import pandas as pd
+import scipy
+import glob
+import datetime
+from shapely.geometry import Point
+import requests
+import ee
+from google.colab import files
+from shapely.geometry import Polygon, MultiPolygon
+import ee
+%config InlineBackend.figure_format = 'retina'
+
+ee.Authenticate()
+```
+
+### Sites
+
+As a test, we used the following locations:
+
+ - PROV = -119.188446,37.063012
+ - ELDER = -123.630644,39.723181
+ - ALAMEDA = -121.79203, 37.50237
+ - SCARP = -121.26971, 35.82157
+ - NFA = -120.92493, 39.10509
+
+These represent a number of different Coastal and Sierran Rivers. 
+
+### Plotting Deficit
+
+Here we quickly plot these sites:
+
+```{r}
+
+# make a tibble
+sites <- tibble(sites=c("PROV", "ELDER","ALAMEDA", "SCARP","NFA"),
+           lon = c(-119.188446, -123.630644,-121.79203,-121.26971,-120.92493),
+           lat = c(37.063012, 39.723181, 37.50237, 35.82157, 39.10509))
+
+# make sf
+sites_sf <- sites %>% 
+  st_as_sf(coords=c("lon","lat"), remove=FALSE, crs=4326)
+
+mapview(sites_sf, zcol="sites")
+
+```
+
+## Deficit Data
+
+These data were calculated for 2001-2021.
+
+```{r}
+#| echo: false
+#| eval: true
+#| message: false
+
+
+# get list of files
+library(fs)
+pml_files <- fs::dir_ls(here("data_out"), regexp = "*.csv")
+# get data
+df <- read_csv(pml_files, id = "sitepath") %>%
+  rename("date"=2) %>% 
+  mutate(site = path_ext_remove(path_file(sitepath)),
+         site = gsub("_PML_PPT","", x = site))
+
+
+
+```
+
+And plot!
+
+```{r}
+#| echo: false
+#| eval: true
+#| message: false
+
+
+ggplot() + 
+  geom_line(data=df, aes(x=date, y=D, color=site)) +
+  labs(x="", y="Deficit (mm)")+
+  scale_color_viridis_d("Site")+
+  theme_classic(base_family = "Atkinson Hyperlegible")
+```
+
+
+```{r}
+#| echo: false
+#| eval: true
+#| message: false
+
+
+ggplot() + 
+  geom_line(data=df, aes(x=date, y=D, color=site), show.legend=FALSE) +
+  labs(x="", y="Deficit (mm)")+
+  scale_color_viridis_d("Site")+
+  theme_classic(base_family = "Atkinson Hyperlegible") + 
+  facet_grid(site~.)
+```
