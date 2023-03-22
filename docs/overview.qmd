@@ -273,12 +273,27 @@ ggmap1 <- ggplot() +
   geom_sf_interactive(
     data=sites_sf,
     aes(
+      fill=sites,
       tooltip = sites,
       data_id = sites
-    ), size=5, pch=21, fill="orange",stroke=0.9, color="white") +
+    ), show.legend=FALSE, size=3, pch=21,stroke=0.7, alpha=0.7, color="white") +
+  scale_fill_viridis_d("") +
   theme_void()
+ggmap1
 
-x <- girafe(ggobj = gg1 + inset_element(ggmap1, left = 0.7, bottom = 0.7, right = 1, top = 1) + 
+# plot static
+plot_def_stat <- gg1 + 
+  inset_element(ggmap1, left = 0.7, bottom = 0.7, right = 1, top = 1) + 
+  #plot_layout(widths = c(2, 1)) + 
+  plot_annotation(title="Subsurface Deficit", 
+                  caption="based on Dralle et al., data 2000-2021", 
+                  theme = theme(plot.title = element_text(size = 16)))
+
+plot_def_stat
+ggsave(plot_def_stat, filename = "figs/subsurface_water_deficit_sample_sites.png", width = 11, height = 8, dpi=300, bg="white")
+
+# plot dynamic
+plot_def_int <- girafe(ggobj = gg1 + inset_element(ggmap1, left = 0.7, bottom = 0.7, right = 1, top = 1) + 
               #plot_layout(widths = c(2, 1)) + 
               plot_annotation(title="Subsurface Deficit", 
                               caption="based on Dralle et al., data 2000-2021", 
@@ -290,7 +305,7 @@ x <- girafe(ggobj = gg1 + inset_element(ggmap1, left = 0.7, bottom = 0.7, right 
               opts_hover(css = "stroke-width:2;")
             ))
 
-x
+plot_def_int
 
 ```
 
@@ -302,12 +317,71 @@ And a faceted version here.
 #| message: false
 #| warning: false
 
-ggplot() + 
+gg2 <- ggplot() + 
   geom_line(data=df, aes(x=date, y=D, color=site), show.legend=FALSE) +
   labs(x="", y="Deficit (mm)")+
   scale_color_viridis_d("Site")+
   theme_classic(base_family = fnt_header) + 
   facet_grid(site~.)
+
+(plot_def_stat2 <- gg2 + ggmap1 + 
+  plot_layout(widths = c(1, 0.25)) + 
+  plot_annotation(title="Subsurface Deficit", 
+                  caption="based on Dralle et al., data 2000-2021", 
+                  theme = theme(plot.title = element_text(size = 16))))
+
+ggsave(plot_def_stat2, filename = "figs/subsurface_water_deficit_sample_sites_facet.png", width = 11, height = 8, dpi=300, bg="white")
+
+
 ```
 
+
+## Zoom to a specific Time Period
+
+Let's look at the 2014+ drought.
+
+```{r}
+#| echo: false
+#| eval: true
+#| message: false
+#| warning: false
+
+df_zoom <- df %>% filter(date > ymd("2013-10-01"),
+                         !is.na(D),
+                         !site %in% c("PROV","DRY"))
+
+sites_sf_trim <- sites_sf %>% filter(sites %in% c("ALAMEDA","ELDER","NFA","SCARP","SOAP"))
+
+# map
+(ggmap2 <- ggplot() +
+  geom_sf(data=cnty, color="gray", linewidth=0.5)+
+  geom_sf_text(data=sites_sf_trim, aes(label=sites), nudge_x = 0.2, nudge_y = 0.5, size=1.4)+
+  geom_sf_interactive(
+    data=sites_sf_trim,
+    aes(
+      fill=sites,
+      tooltip = sites,
+      data_id = sites
+    ), show.legend=FALSE, size=5, pch=21,stroke=0.7, alpha=0.7, color="white") +
+  scale_fill_viridis_d("") +
+  theme_void())
+
+gg3 <- ggplot() + 
+  geom_line(data=df_zoom, aes(x=date, y=D, color=site), show.legend=TRUE) +
+  labs(x="", y="Deficit (mm)")+
+  scale_x_date(date_breaks = "6 months",date_labels = "%b-%y")+
+  scale_color_viridis_d("Site")+
+  cowplot::theme_half_open(font_family = fnt_header) + 
+  cowplot::background_grid("x")+
+  theme(axis.text.x = element_text(vjust=0.5, hjust=0.5, size=8, angle=90))
+
+(plot_def_stat3 <- gg3 + inset_element(ggmap2, left = 0.65, bottom = 0.65, right = 1, top = 1) +  
+  plot_annotation(title="Subsurface Deficit", 
+                  caption="based on Dralle et al., data 2013-2021", 
+                  theme = theme(plot.title = element_text(size = 16))))
+
+ggsave(plot_def_stat3, filename = "figs/subsurface_water_deficit_sample_sites_facet_drought.png", width = 11, height = 8, dpi=300, bg="white")
+
+
+```
 
