@@ -31,6 +31,12 @@ library(tidyverse)
 library(here)
 #library(reticulate)
 library(sf)
+library(tigris)
+options(tigris_use_cache = TRUE)
+library(ggiraph)
+library(glue)
+library(fs)
+library(patchwork)
 library(mapview)
 mapviewOptions(fgb=FALSE)
 
@@ -40,16 +46,16 @@ mapviewOptions(fgb=FALSE)
 
 ## Drought Subsurface Deficit Analysis
 
-Based on Dralle et al (numerous) papers.
+The analysis is based on a number of papers, but see [here.](https://hess.copernicus.org/articles/25/2861/2021/)^[Dralle, D. N., W. J. Hahm, D. M. Rempe, N. J. Karst, S. E. Thompson, and W. E. Dietrich. 2018. Quantification of the seasonal hillslope water storage that does not drive streamflow. Hydrological processes 32:1978–1992.]
 
 ### Code 
 
-Code is based on this analysis in `python`.
+The python code [found here](https://colab.research.google.com/drive/1Fijggch1V3wcV8iU2NnlVVm77PGMd_ov?usp=sharing#scrollTo=tM-RO4DldBbR) runs the analysis required to generate the subsurface water deficit.
 
 ```{bash}
 #| eval: false
-#| echo: true
-#| code-line-numbers: "|24"
+#| echo: false
+ 
 !pip install -q geopandas 
 
 %matplotlib inline
@@ -73,48 +79,158 @@ import ee
 %config InlineBackend.figure_format = 'retina'
 
 ee.Authenticate()
+
+# specify point locations and site names for deficit calculations
+pts = [Point( -119.188446,37.063012),
+       Point(-119.258238,37.029470),
+       Point( -123.630644,39.723181),
+       Point(-123.479911,39.566365)]
+
+# specify site names
+sites = ['PROV','SOAP','ELDER','DRY']
+
+# geodataframe to save data
+gdf = gp.GeoDataFrame({'site':sites},geometry=pts,crs='epsg:4326',index=[0,1,2,3])
+
+# Create earth engine feature collection
+fts_list = []
+geos = []
+names = []
+for i,row in gdf.iterrows():
+  x = row.geometry.centroid.x
+  y = row.geometry.centroid.y
+  geo = ee.Geometry.Point((x,y))
+  geos.append(geo)
+  names.append(row.site)
+  ft = ee.Feature(geo)
+  ft = ft.set('site',row.site)
+  fts_list.append(ft)
+fts = ee.FeatureCollection(fts_list)
+
+# Start/stop time of analysis...PML v2 only goes through 2021
+start='2000-10-01'
+stop='2021-10-01'
+
+#Flux is stored as 100*mm/day, and duration between samples is 8 days
+multiplier = 8.0 
+dataset = ee.ImageCollection("projects/pml_evapotranspiration/PML/OUTPUT/PML_V2_8day_v016");
+scale = 0.01
+
+#### calculating F_out WITHOUT SNOW CORRECTION ####
+# mapper for getting single ET raster for each timestep
+def sumpml(image):
+  # ET bands into one band
+  temp = image.select('Es').add(image.select('Ec')).add(image.select('Ei')).multiply(scale)
+
+  #get the first band of this new temporary image, rename it to 'ET', 
+  #reproject it, and then multiply by multiplier
+  temp = temp.select([0], ['ET']).reproject(
+      crs='EPSG:4326',scale=1000
+      ).multiply(multiplier)
+
+  #temp should now be total ET in mm over the time window between images
+  #assign the datetime stamp and the index from the original image
+  temp = temp.set('system:time_start', image.get('system:time_start'))
+  temp = temp.set('system:index', image.get('system:index'))
+  return temp
+
+#now, actually map the pml image collection w/ this function,
+# in order to make a new combined ET image collection
+et = ee.ImageCollection(dataset.map(sumpml).select('ET')).filter(ee.Filter.date(start, stop))
+et = et.toBands()
+
+# Use PRISM rainfall and PML ET to calculate deficit at monthly timestep
+data = {}
+for i,geo in enumerate(geos):
+  ft = et.reduceRegion(ee.Reducer.mean(), geo, 1000)
+  vals = ft.getInfo()
+  dates = pd.to_datetime([item.split('_')[0] for item in list(vals)])
+  etvals = [item for item in vals.values()]
+  etdf = pd.DataFrame({'ET':etvals},index=dates)
+  etdf = etdf.resample('M').sum()
+
+  dataset = ee.ImageCollection("OREGONSTATE/PRISM/AN81m").filter(ee.Filter.date(start, stop))
+  ppt = dataset.select('ppt').toBands()
+  ft = ppt.reduceRegion(ee.Reducer.mean(), geo, 4000)
+  vals = ft.getInfo()
+  dates = pd.to_datetime([item.split('_')[0] for item in list(vals)],format='%Y%m')
+  pptvals = [item for item in vals.values()]
+  pptdf = pd.DataFrame({'P':pptvals},index=dates).resample('M').sum()
+  
+  # Combine
+  df = pd.concat([etdf, pptdf],axis=1)
+  df['wy'] = [item.year if item.month<10 else item.year+1 for item in df.index]
+  df['sumP'] = df.groupby('wy')['P'].cumsum()
+
+  deficit = [0]
+  counter = 0
+  # Wang-Erlandsson deficit calculation
+  for idx,row in df.iterrows():
+    A = row.ET - row.P
+    next = np.max([0, deficit[counter] + A])
+    deficit.append(next)
+    counter = counter + 1
+  df['D'] = deficit[1:]
+  data[names[i]] = df
+  
+for site in list(data):
+  tempdf = data[site]
+  tempdf.to_csv('./%s_PML_PPT.csv'%site)
+  
+# Download data files for each site
+# can also just grab from file directory folder icon on left side
+# you will have to "allow" colab to download multiple files
+# via your browser, most likely
+for site in list(data):
+  files.download('./%s_PML_PPT.csv'%site) 
+  
+f,axs = plt.subplots(1,len(data),figsize=(3*len(data),2.5),sharey=True)
+axs[0].set_ylabel('Deficit (mm)')
+for i,site in enumerate(list(data)):
+  ax = axs[i]
+  temp = data[site]
+  temp.D.plot(ax=ax,label=site)
+  ax.set_title(site)
+  ax.set_xlim('2005-10','2021-10')
+f.autofmt_xdate()
+f.tight_layout()
 ```
 
 ### Sites
 
-As a test, we used the following locations:
-
- - PROV = -119.188446,37.063012
- - ELDER = -123.630644,39.723181
- - ALAMEDA = -121.79203, 37.50237
- - SCARP = -121.26971, 35.82157
- - NFA = -120.92493, 39.10509
-
-These represent a number of different Coastal and Sierran Rivers. 
+Here's a sampling of sites across CA that represent a number of different Coastal and Sierran Rivers, and incidentally, different subsurface storage sizes.
 
 ### Plotting Deficit
 
-Here we quickly plot these sites:
+Here we quickly plot these sites with mapview to get a sense of where things are.
 
 ```{r}
+#| echo: false
+#| eval: true
+
 
 # make a tibble
-sites <- tibble(sites=c("PROV", "ELDER","ALAMEDA", "SCARP","NFA"),
-           lon = c(-119.188446, -123.630644,-121.79203,-121.26971,-120.92493),
-           lat = c(37.063012, 39.723181, 37.50237, 35.82157, 39.10509))
+sites <- tibble(sites=c("PROV", "SOAP", "ELDER","ALAMEDA", "SCARP","NFA", "DRY"),
+           lon = c(-119.188446,-119.258238, -123.630644,-121.79203,-121.26971,-120.92493, -123.479911),
+           lat = c(37.063012, 37.029470,39.723181, 37.50237, 35.82157, 39.10509, 39.566365))
 
 # make sf
 sites_sf <- sites %>% 
   st_as_sf(coords=c("lon","lat"), remove=FALSE, crs=4326)
 
-mapview(sites_sf, zcol="sites")
+mapview(sites_sf, zcol="sites", layer.name="Sites")
 
 ```
 
 ## Deficit Data
 
-These data were calculated for 2001-2021.
+These data were calculated for 2001-2021. Data are pulled in and cleaned, compiled, and then plotted below.
 
 ```{r}
 #| echo: false
 #| eval: true
 #| message: false
-
+#| results: hide
 
 # get list of files
 library(fs)
@@ -125,7 +241,9 @@ df <- read_csv(pml_files, id = "sitepath") %>%
   mutate(site = path_ext_remove(path_file(sitepath)),
          site = gsub("_PML_PPT","", x = site))
 
-
+# get county data
+# now a map
+cnty <- counties(state = "CA")
 
 ```
 
@@ -135,26 +253,61 @@ And plot!
 #| echo: false
 #| eval: true
 #| message: false
+#| warning: false
 
-
-ggplot() + 
-  geom_line(data=df, aes(x=date, y=D, color=site)) +
+# all together
+gg1 <- ggplot() + 
+  geom_line_interactive(data=df, 
+                        aes(x=date, y=D, color=site, tooltip = site,
+      data_id = site)) +
   labs(x="", y="Deficit (mm)")+
-  scale_color_viridis_d("Site")+
-  theme_classic(base_family = "Atkinson Hyperlegible")
+  scale_color_viridis_d("")+
+  theme_classic(base_family = fnt_header)+
+    theme(legend.position = c(0.1, 0.82),
+          legend.text = element_text(size=7, family = fnt_text))
+
+
+# map
+ggmap1 <- ggplot() +
+  geom_sf(data=cnty, color="gray", linewidth=0.5)+
+  geom_sf_interactive(
+    data=sites_sf,
+    aes(
+      tooltip = sites,
+      data_id = sites
+    ), size=5, pch=21, fill="orange",stroke=0.9, color="white") +
+  theme_void()
+
+x <- girafe(ggobj = gg1 + inset_element(ggmap1, left = 0.7, bottom = 0.7, right = 1, top = 1) + 
+              #plot_layout(widths = c(2, 1)) + 
+              plot_annotation(title="Subsurface Deficit", 
+                              caption="based on Dralle et al., data 2000-2021", 
+                              theme = theme(plot.title = element_text(size = 16))), 
+            width_svg = 8, height_svg = 6,
+            options = list(
+              opts_zoom = opts_zoom(min = 1, max = 4),
+              opts_hover_inv(css = "opacity:0.1;"),
+              opts_hover(css = "stroke-width:2;")
+            ))
+
+x
+
 ```
 
+And a faceted version here.
 
 ```{r}
 #| echo: false
 #| eval: true
 #| message: false
-
+#| warning: false
 
 ggplot() + 
   geom_line(data=df, aes(x=date, y=D, color=site), show.legend=FALSE) +
   labs(x="", y="Deficit (mm)")+
   scale_color_viridis_d("Site")+
-  theme_classic(base_family = "Atkinson Hyperlegible") + 
+  theme_classic(base_family = fnt_header) + 
   facet_grid(site~.)
 ```
+
+

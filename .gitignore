@@ -2,3 +2,10 @@
 .Rhistory
 .RData
 .Ruserdata
+
+
+# ignore qmd stuff
+docs/overview_files/
+docs/*html
+docs/
+.DS_Store
