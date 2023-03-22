@@ -20,6 +20,11 @@ get_os <- function() {
   }
 }
 
+# similar fonts to Century Gothic on Google:
+#Muli
+#Questrial
+
+
 f_get_fonts <- function(fnt_head=NULL, fnt_txt=NULL, fnt_pr=4){
 
   # check font paths

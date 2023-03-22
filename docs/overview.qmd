@@ -19,7 +19,7 @@ source(here("code/f_get_fonts.R"))
 font1 <- if(get_os()=="windows"){
   "Century Gothic"
 } else {
-  "Atkinson Hyperlegible"
+  "Questrial"
 }
 font2 <- "Roboto Condensed"
 
